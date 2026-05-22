@@ -1,8 +1,3 @@
-/**
- * loginScreen.jsx — MangaVault
- * Firebase Auth sign-in for Expo Web + Native.
- * After signIn succeeds, App.js onAuthStateChanged handles navigation automatically.
- */
 
 import { useState } from "react";
 import {

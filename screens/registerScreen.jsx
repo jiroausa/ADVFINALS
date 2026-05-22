@@ -1,7 +1,3 @@
-/**
- * registerScreen.jsx — MangaVault
- * Enhanced manga ink-panel aesthetic. Firebase Auth registration.
- */
 
 import { useState, useRef } from "react";
 import {

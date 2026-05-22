@@ -1,7 +1,4 @@
-/**
- * profileScreen.jsx — MangaVault
- * Clean profile: user info, stats, rated manga, logout.
- */
+
 
 import React, { useEffect, useState } from "react";
 import {

@@ -1,15 +1,13 @@
-/**
- * mangaDetailScreen.jsx — MangaVault
- * Clean detail page: cover, info, rate, comment.
- */
+
 
 import React, { useState, useEffect, useRef } from "react";
 import {
   View, Text, TouchableOpacity, StyleSheet, ScrollView,
   Image, ActivityIndicator, TextInput, Platform, StatusBar,
-  KeyboardAvoidingView, Animated, Alert,
+  KeyboardAvoidingView, Animated, Alert, Modal, Pressable,
 } from "react-native";
 import { doc, onSnapshot, updateDoc, arrayUnion, arrayRemove } from "firebase/firestore";
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
 import { auth, db } from "../firebase/firebaseConfig";
 
 const C = {
@@ -18,10 +16,12 @@ const C = {
   accent: "#E8272F", accentGold: "#F5C518", accentBlue: "#2B7FE8",
   text: "#F0EDE8", textMuted: "#666666", textDim: "#3A3A3A",
   white: "#FFFFFF", panel: "#1A1A1A",
+  overlay: "rgba(0,0,0,0.82)",
 };
 
 const RATING_LABELS = ["", "Did not like it", "It was ok", "Liked it", "Really liked it", "It was amazing"];
 
+// ─── Stars ────────────────────────────────────────────────────────────────────
 function Stars({ rating, onSelect, size = 28, interactive = false }) {
   const [hover, setHover] = useState(0);
   const display = interactive ? (hover || rating) : rating;
@@ -43,6 +43,7 @@ function Stars({ rating, onSelect, size = 28, interactive = false }) {
   );
 }
 
+// ─── Cover ────────────────────────────────────────────────────────────────────
 function Cover({ uri, title }) {
   const [err, setErr] = useState(false);
   const [ok, setOk] = useState(false);
@@ -62,9 +63,229 @@ function Cover({ uri, title }) {
   );
 }
 
+// ─── Auth Modal ───────────────────────────────────────────────────────────────
+// Slide-up sheet that lets the user log in or register without leaving the page.
+function AuthModal({ visible, onClose, onSuccess, triggerLabel = "rate & comment" }) {
+  const [tab, setTab] = useState("login"); // "login" | "register"
+  const slideAnim = useRef(new Animated.Value(500)).current;
+
+  // Fields
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [username, setUsername] = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (visible) {
+      setError(""); setEmail(""); setPassword(""); setUsername(""); setConfirmPw("");
+      Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, damping: 22, stiffness: 180 }).start();
+    } else {
+      Animated.timing(slideAnim, { toValue: 500, duration: 220, useNativeDriver: true }).start();
+    }
+  }, [visible]);
+
+  function switchTab(t) { setTab(t); setError(""); }
+
+  async function handleLogin() {
+    setError("");
+    if (!email.trim() || !password) { setError("Enter your email and password."); return; }
+    setLoading(true);
+    try {
+      await signInWithEmailAndPassword(auth, email.trim(), password);
+      onSuccess?.();
+    } catch (e) {
+      switch (e.code) {
+        case "auth/user-not-found":
+        case "auth/wrong-password":
+        case "auth/invalid-credential":
+          setError("Incorrect email or password."); break;
+        case "auth/invalid-email":
+          setError("Enter a valid email address."); break;
+        case "auth/too-many-requests":
+          setError("Too many attempts. Try again later."); break;
+        default: setError(e.message);
+      }
+    } finally { setLoading(false); }
+  }
+
+  async function handleRegister() {
+    setError("");
+    if (!username.trim() || !email.trim() || !password) { setError("All fields are required."); return; }
+    if (password.length < 6) { setError("Password must be at least 6 characters."); return; }
+    if (password !== confirmPw) { setError("Passwords don't match."); return; }
+    setLoading(true);
+    try {
+      const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
+      await updateProfile(cred.user, { displayName: username.trim() });
+      onSuccess?.();
+    } catch (e) {
+      if (e.code === "auth/email-already-in-use") setError("An account with that email already exists.");
+      else setError(e.message);
+    } finally { setLoading(false); }
+  }
+
+  if (!visible) return null;
+
+  return (
+    <Modal transparent animationType="none" visible={visible} onRequestClose={onClose}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        {/* Dimmed backdrop */}
+        <Pressable style={s.modalBackdrop} onPress={onClose} />
+
+        {/* Sheet */}
+        <Animated.View style={[s.modalSheet, { transform: [{ translateY: slideAnim }] }]}>
+          {/* Handle bar */}
+          <View style={s.sheetHandle} />
+
+          {/* Header */}
+          <View style={s.sheetHeader}>
+            <View>
+              <Text style={s.sheetTitle}>
+                MANGA<Text style={{ color: C.accent }}>VAULT</Text>
+              </Text>
+              <Text style={s.sheetSubtitle}>Sign in to {triggerLabel}</Text>
+            </View>
+            <TouchableOpacity onPress={onClose} style={s.sheetCloseBtn}>
+              <Text style={s.sheetCloseBtnText}>✕</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Tab switcher */}
+          <View style={s.tabRow}>
+            <TouchableOpacity
+              style={[s.tab, tab === "login" && s.tabActive]}
+              onPress={() => switchTab("login")}
+            >
+              <Text style={[s.tabText, tab === "login" && s.tabTextActive]}>Sign In</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[s.tab, tab === "register" && s.tabActive]}
+              onPress={() => switchTab("register")}
+            >
+              <Text style={[s.tabText, tab === "register" && s.tabTextActive]}>Create Account</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Error */}
+          {error ? (
+            <View style={s.errorBox}>
+              <Text style={s.errorText}>⚠ {error}</Text>
+            </View>
+          ) : null}
+
+          {/* Login form */}
+          {tab === "login" && (
+            <View style={s.formFields}>
+              <View style={s.fieldGroup}>
+                <Text style={s.fieldLabel}>EMAIL</Text>
+                <TextInput
+                  style={s.fieldInput}
+                  placeholder="your@email.com"
+                  placeholderTextColor={C.textDim}
+                  value={email}
+                  onChangeText={(t) => { setEmail(t); setError(""); }}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  autoComplete="email"
+                />
+              </View>
+              <View style={s.fieldGroup}>
+                <Text style={s.fieldLabel}>PASSWORD</Text>
+                <TextInput
+                  style={s.fieldInput}
+                  placeholder="••••••••"
+                  placeholderTextColor={C.textDim}
+                  value={password}
+                  onChangeText={(t) => { setPassword(t); setError(""); }}
+                  secureTextEntry
+                  autoCapitalize="none"
+                  onSubmitEditing={handleLogin}
+                />
+              </View>
+              <TouchableOpacity
+                style={[s.submitBtn, loading && s.submitBtnDisabled]}
+                onPress={handleLogin}
+                disabled={loading}
+              >
+                <Text style={s.submitBtnText}>{loading ? "Signing in…" : "Sign In"}</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Register form */}
+          {tab === "register" && (
+            <View style={s.formFields}>
+              <View style={s.fieldGroup}>
+                <Text style={s.fieldLabel}>USERNAME</Text>
+                <TextInput
+                  style={s.fieldInput}
+                  placeholder="MangaReader42"
+                  placeholderTextColor={C.textDim}
+                  value={username}
+                  onChangeText={(t) => { setUsername(t); setError(""); }}
+                  autoCapitalize="none"
+                />
+              </View>
+              <View style={s.fieldGroup}>
+                <Text style={s.fieldLabel}>EMAIL</Text>
+                <TextInput
+                  style={s.fieldInput}
+                  placeholder="your@email.com"
+                  placeholderTextColor={C.textDim}
+                  value={email}
+                  onChangeText={(t) => { setEmail(t); setError(""); }}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                />
+              </View>
+              <View style={s.fieldGroup}>
+                <Text style={s.fieldLabel}>PASSWORD</Text>
+                <TextInput
+                  style={s.fieldInput}
+                  placeholder="Min. 6 characters"
+                  placeholderTextColor={C.textDim}
+                  value={password}
+                  onChangeText={(t) => { setPassword(t); setError(""); }}
+                  secureTextEntry
+                  autoCapitalize="none"
+                />
+              </View>
+              <View style={s.fieldGroup}>
+                <Text style={s.fieldLabel}>CONFIRM PASSWORD</Text>
+                <TextInput
+                  style={s.fieldInput}
+                  placeholder="Repeat password"
+                  placeholderTextColor={C.textDim}
+                  value={confirmPw}
+                  onChangeText={(t) => { setConfirmPw(t); setError(""); }}
+                  secureTextEntry
+                  autoCapitalize="none"
+                  onSubmitEditing={handleRegister}
+                />
+              </View>
+              <TouchableOpacity
+                style={[s.submitBtn, loading && s.submitBtnDisabled]}
+                onPress={handleRegister}
+                disabled={loading}
+              >
+                <Text style={s.submitBtnText}>{loading ? "Creating account…" : "Create Account"}</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          <View style={{ height: 20 }} />
+        </Animated.View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+// ─── Main Screen ──────────────────────────────────────────────────────────────
 export default function MangaDetailScreen({ route, navigation }) {
   const { mangaId } = route.params;
-  const currentUser = auth.currentUser;
+  const [currentUser, setCurrentUser] = useState(auth.currentUser);
   const userId = currentUser?.uid;
   const userName = currentUser?.displayName || currentUser?.email?.split("@")[0] || "Reader";
 
@@ -78,8 +299,23 @@ export default function MangaDetailScreen({ route, navigation }) {
   const [submittingComment, setSubmittingComment] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
   const [showAllComments, setShowAllComments] = useState(false);
+
+  // Auth modal state
+  const [authModalVisible, setAuthModalVisible] = useState(false);
+  const [authTriggerLabel, setAuthTriggerLabel] = useState("rate & comment");
+  // After login succeeds inside the modal, replay the intended action
+  const [pendingAction, setPendingAction] = useState(null); // "rate" | "comment"
+
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const scrollRef = useRef(null);
+
+  // Keep currentUser in sync when auth state changes (e.g. after modal login)
+  useEffect(() => {
+    const unsub = auth.onAuthStateChanged((user) => {
+      setCurrentUser(user);
+    });
+    return unsub;
+  }, []);
 
   useEffect(() => {
     const unsub = onSnapshot(doc(db, "manga_reviews", mangaId), (snap) => {
@@ -95,7 +331,18 @@ export default function MangaDetailScreen({ route, navigation }) {
       Animated.timing(fadeAnim, { toValue: 1, duration: 350, useNativeDriver: true }).start();
     });
     return unsub;
-  }, [mangaId]);
+  }, [mangaId, userId]);
+
+  function openAuthModal(action, label) {
+    setPendingAction(action);
+    setAuthTriggerLabel(label);
+    setAuthModalVisible(true);
+  }
+
+  function handleAuthSuccess() {
+    setAuthModalVisible(false);
+    // pendingAction will be handled naturally because currentUser re-renders the UI
+  }
 
   if (loading) return (
     <View style={[s.screen, { alignItems: "center", justifyContent: "center" }]}>
@@ -123,7 +370,10 @@ export default function MangaDetailScreen({ route, navigation }) {
   const comments = showAllComments ? allComments : allComments.slice(0, 5);
 
   async function submitRating(star) {
-    if (!currentUser) return;
+    if (!currentUser) {
+      openAuthModal("rate", "rate this manga");
+      return;
+    }
     setPendingRating(star);
     setSubmittingRating(true);
     try {
@@ -179,6 +429,14 @@ export default function MangaDetailScreen({ route, navigation }) {
     <View style={s.screen}>
       <StatusBar barStyle="light-content" backgroundColor={C.surface} />
 
+      {/* Auth modal — slides up without leaving the page */}
+      <AuthModal
+        visible={authModalVisible}
+        onClose={() => setAuthModalVisible(false)}
+        onSuccess={handleAuthSuccess}
+        triggerLabel={authTriggerLabel}
+      />
+
       {/* Nav */}
       <View style={s.nav}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={s.backBtn} activeOpacity={0.7}>
@@ -204,7 +462,6 @@ export default function MangaDetailScreen({ route, navigation }) {
               <Text style={s.heroTitle}>{manga.mangaTitle}</Text>
               {manga.author ? <Text style={s.heroAuthor}>by {manga.author}</Text> : null}
 
-              {/* Community rating */}
               <View style={s.communityRating}>
                 <Stars rating={Math.round(avgRating)} size={16} />
                 <View style={{ flexDirection: "row", alignItems: "baseline", gap: 5, marginTop: 3 }}>
@@ -213,7 +470,6 @@ export default function MangaDetailScreen({ route, navigation }) {
                 </View>
               </View>
 
-              {/* Genres */}
               {manga.genre?.length > 0 && (
                 <View style={s.genreRow}>
                   {manga.genre.map((g) => (
@@ -224,7 +480,6 @@ export default function MangaDetailScreen({ route, navigation }) {
                 </View>
               )}
 
-              {/* Status */}
               {manga.status ? (
                 <View style={[s.statusBadge, { backgroundColor: statusBg }]}>
                   <Text style={[s.statusBadgeText, { color: statusColor }]}>
@@ -316,18 +571,22 @@ export default function MangaDetailScreen({ route, navigation }) {
                 )}
               </View>
             ) : (
-              <View style={s.authGate}>
-                <Text style={s.authGateEmoji}>⭐</Text>
-                <Text style={s.authGateTitle}>Want to rate this manga?</Text>
-                <Text style={s.authGateSub}>Sign in to leave a rating and join the conversation.</Text>
-                <View style={s.authGateBtns}>
-                  <TouchableOpacity style={s.authBtn} onPress={() => navigation.navigate("Login")}>
-                    <Text style={s.authBtnText}>Sign In</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={s.authBtnOutline} onPress={() => navigation.navigate("Register")}>
-                    <Text style={s.authBtnOutlineText}>Create Account</Text>
-                  </TouchableOpacity>
-                </View>
+              /* Guest: show ghost stars that trigger the auth modal on tap */
+              <View style={s.rateBox}>
+                <Text style={s.rateLabel}>How would you rate this?</Text>
+                <TouchableOpacity
+                  onPress={() => openAuthModal("rate", "rate this manga")}
+                  activeOpacity={0.75}
+                  style={{ alignSelf: "flex-start" }}
+                >
+                  <Stars rating={0} size={40} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={s.guestRateHint}
+                  onPress={() => openAuthModal("rate", "rate this manga")}
+                >
+                  <Text style={s.guestRateHintText}>🔒  Sign in to leave your rating</Text>
+                </TouchableOpacity>
               </View>
             )}
           </View>
@@ -369,12 +628,25 @@ export default function MangaDetailScreen({ route, navigation }) {
                 </View>
               </View>
             ) : (
-              <TouchableOpacity style={s.commentAuthGate} onPress={() => navigation.navigate("Login")}>
-                <Text style={s.commentAuthGateText}>🔒  Sign in to leave a comment</Text>
+              /* Guest: tappable placeholder comment box */
+              <TouchableOpacity
+                style={s.guestCommentBox}
+                onPress={() => openAuthModal("comment", "leave a comment")}
+                activeOpacity={0.8}
+              >
+                <View style={s.guestCommentAvatarPlaceholder}>
+                  <Text style={{ fontSize: 16 }}>?</Text>
+                </View>
+                <View style={s.guestCommentInputFake}>
+                  <Text style={s.guestCommentPlaceholder}>Share your thoughts…</Text>
+                </View>
+                <View style={s.guestPostBtnFake}>
+                  <Text style={s.guestPostBtnFakeText}>🔒</Text>
+                </View>
               </TouchableOpacity>
             )}
 
-            {/* Comment list */}
+            {/* Comment list — always visible to everyone */}
             {allComments.length === 0 ? (
               <View style={s.noComments}>
                 <Text style={{ fontSize: 30 }}>💬</Text>
@@ -492,10 +764,7 @@ const s = StyleSheet.create({
     borderRadius: 4, paddingHorizontal: 7, paddingVertical: 3,
   },
   genreChipText: { fontSize: 10, color: C.textMuted, fontWeight: "700" },
-  statusBadge: {
-    alignSelf: "flex-start", borderRadius: 5,
-    paddingHorizontal: 9, paddingVertical: 4,
-  },
+  statusBadge: { alignSelf: "flex-start", borderRadius: 5, paddingHorizontal: 9, paddingVertical: 4 },
   statusBadgeText: { fontSize: 11, fontWeight: "800" },
 
   // Details grid
@@ -536,27 +805,39 @@ const s = StyleSheet.create({
   ratingSuccessText: { color: "#4CAF50", fontWeight: "900", fontSize: 13 },
   changeRatingHint: { fontSize: 11, color: C.textMuted, marginTop: -4 },
 
-  // Auth gate
-  authGate: {
+  // Guest rate hint
+  guestRateHint: {
     backgroundColor: C.surface2, borderWidth: 1, borderColor: C.border,
-    borderRadius: 12, padding: 24, alignItems: "center", gap: 8,
+    borderRadius: 8, paddingVertical: 10, paddingHorizontal: 14,
+    alignSelf: "flex-start",
   },
-  authGateEmoji: { fontSize: 32 },
-  authGateTitle: { fontSize: 17, fontWeight: "900", color: C.white, textAlign: "center" },
-  authGateSub: { fontSize: 13, color: C.textMuted, textAlign: "center", lineHeight: 19 },
-  authGateBtns: { flexDirection: "row", gap: 10, marginTop: 8 },
-  authBtn: {
-    backgroundColor: C.accent, paddingHorizontal: 24, paddingVertical: 12,
-    borderRadius: 8,
-  },
-  authBtnText: { color: C.white, fontWeight: "900", fontSize: 14 },
-  authBtnOutline: {
-    backgroundColor: "transparent", paddingHorizontal: 20, paddingVertical: 12,
-    borderRadius: 8, borderWidth: 2, borderColor: C.accent,
-  },
-  authBtnOutlineText: { color: C.accent, fontWeight: "900", fontSize: 14 },
+  guestRateHintText: { fontSize: 13, color: C.accentGold, fontWeight: "700" },
 
-  // Comment input
+  // Guest comment box
+  guestCommentBox: {
+    flexDirection: "row", alignItems: "center", gap: 10,
+    backgroundColor: C.surface2, borderWidth: 1, borderColor: C.borderBright,
+    borderRadius: 10, padding: 12, marginBottom: 20,
+    opacity: 0.85,
+  },
+  guestCommentAvatarPlaceholder: {
+    width: 38, height: 38, borderRadius: 19,
+    backgroundColor: C.borderBright, alignItems: "center", justifyContent: "center", flexShrink: 0,
+  },
+  guestCommentInputFake: {
+    flex: 1, backgroundColor: C.panel, borderWidth: 1, borderColor: C.border,
+    borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, minHeight: 44,
+    justifyContent: "center",
+  },
+  guestCommentPlaceholder: { fontSize: 14, color: C.textDim },
+  guestPostBtnFake: {
+    backgroundColor: C.surface2, borderRadius: 8,
+    paddingVertical: 8, paddingHorizontal: 14,
+    borderWidth: 1, borderColor: C.border,
+  },
+  guestPostBtnFakeText: { fontSize: 18 },
+
+  // Comment input (logged in)
   commentInputWrap: { flexDirection: "row", gap: 10, marginBottom: 20 },
   commentAvatar: {
     width: 38, height: 38, borderRadius: 19,
@@ -571,19 +852,9 @@ const s = StyleSheet.create({
   },
   commentInputFooter: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   charCount: { fontSize: 11, color: C.textDim },
-  postBtn: {
-    backgroundColor: C.accent, borderRadius: 8,
-    paddingVertical: 8, paddingHorizontal: 18,
-  },
+  postBtn: { backgroundColor: C.accent, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 18 },
   postBtnDisabled: { opacity: 0.4 },
   postBtnText: { color: C.white, fontWeight: "900", fontSize: 13 },
-
-  // Comment auth gate
-  commentAuthGate: {
-    backgroundColor: C.surface2, borderWidth: 1, borderColor: C.borderBright,
-    borderRadius: 10, paddingVertical: 16, alignItems: "center", marginBottom: 20,
-  },
-  commentAuthGateText: { fontSize: 14, color: C.accentGold, fontWeight: "700" },
 
   // No comments
   noComments: { paddingVertical: 28, alignItems: "center", gap: 8 },
@@ -591,16 +862,11 @@ const s = StyleSheet.create({
 
   // Comment items
   commentItem: { marginBottom: 12 },
-  commentBubble: {
-    borderRadius: 12, padding: 14, borderWidth: 1, borderColor: C.border,
-  },
+  commentBubble: { borderRadius: 12, padding: 14, borderWidth: 1, borderColor: C.border },
   commentBubbleHeader: {
     flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10,
   },
-  miniAvatar: {
-    width: 30, height: 30, borderRadius: 15,
-    alignItems: "center", justifyContent: "center",
-  },
+  miniAvatar: { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center" },
   miniAvatarText: { fontSize: 12, fontWeight: "900" },
   commentAuthor: { fontSize: 13, fontWeight: "900", color: C.white },
   commentDate: { fontSize: 10, color: C.textMuted, marginTop: 1 },
@@ -608,10 +874,87 @@ const s = StyleSheet.create({
   deleteBtnText: { fontSize: 11, color: C.accent, fontWeight: "700" },
   commentText: { fontSize: 14, color: C.text, lineHeight: 21 },
 
-  // Show more
   showMoreBtn: {
     alignItems: "center", paddingVertical: 12,
     borderWidth: 1, borderColor: C.border, borderRadius: 8, marginTop: 4,
   },
   showMoreText: { fontSize: 13, color: C.accentGold, fontWeight: "700" },
+
+  // ── Auth Modal ──────────────────────────────────────────────────────────────
+  modalBackdrop: {
+    position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: C.overlay,
+  },
+  modalSheet: {
+    position: "absolute", bottom: 0, left: 0, right: 0,
+    backgroundColor: "#111111",
+    borderTopLeftRadius: 20, borderTopRightRadius: 20,
+    borderTopWidth: 1, borderColor: C.borderBright,
+    paddingHorizontal: 22, paddingTop: 12,
+    maxHeight: "92%",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -8 },
+    shadowOpacity: 0.6,
+    shadowRadius: 24,
+    elevation: 30,
+  },
+  sheetHandle: {
+    alignSelf: "center", width: 40, height: 4,
+    backgroundColor: C.border, borderRadius: 2, marginBottom: 18,
+  },
+  sheetHeader: {
+    flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start",
+    marginBottom: 20,
+  },
+  sheetTitle: {
+    fontSize: 22, fontWeight: "900", color: C.white,
+    fontFamily: Platform.OS === "ios" ? "Georgia" : "serif",
+    letterSpacing: 1,
+  },
+  sheetSubtitle: { fontSize: 12, color: C.textMuted, marginTop: 3 },
+  sheetCloseBtn: {
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: C.surface2, borderWidth: 1, borderColor: C.border,
+    alignItems: "center", justifyContent: "center",
+  },
+  sheetCloseBtnText: { fontSize: 13, color: C.textMuted, fontWeight: "700" },
+
+  // Tabs
+  tabRow: {
+    flexDirection: "row", gap: 0,
+    backgroundColor: C.surface2, borderRadius: 8,
+    borderWidth: 1, borderColor: C.border,
+    marginBottom: 16, overflow: "hidden",
+  },
+  tab: {
+    flex: 1, paddingVertical: 11, alignItems: "center",
+  },
+  tabActive: {
+    backgroundColor: C.accent,
+  },
+  tabText: { fontSize: 13, fontWeight: "800", color: C.textMuted },
+  tabTextActive: { color: C.white },
+
+  // Error
+  errorBox: {
+    backgroundColor: "#2A0A0A", borderWidth: 1, borderColor: C.accent,
+    borderRadius: 8, paddingVertical: 10, paddingHorizontal: 14, marginBottom: 12,
+  },
+  errorText: { fontSize: 13, color: C.accent, fontWeight: "600" },
+
+  // Form fields
+  formFields: { gap: 12 },
+  fieldGroup: { gap: 5 },
+  fieldLabel: { fontSize: 10, color: C.textMuted, fontWeight: "900", letterSpacing: 1.5 },
+  fieldInput: {
+    backgroundColor: C.panel, borderWidth: 1, borderColor: C.border,
+    borderRadius: 8, paddingHorizontal: 14, paddingVertical: 12,
+    fontSize: 15, color: C.text,
+  },
+  submitBtn: {
+    backgroundColor: C.accent, borderRadius: 8,
+    paddingVertical: 14, alignItems: "center", marginTop: 4,
+  },
+  submitBtnDisabled: { opacity: 0.5 },
+  submitBtnText: { color: C.white, fontWeight: "900", fontSize: 15 },
 });

@@ -1,5 +1,5 @@
 // App.js
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { View, ActivityIndicator } from "react-native";
 import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
@@ -15,39 +15,51 @@ import MangaDetailScreen from "./screens/mangaDetailScreen";
 
 const Stack = createNativeStackNavigator();
 
-// Shown when logged OUT
-function AuthStack() {
+function RootStack() {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="Home" component={HomeScreen} />
+      <Stack.Screen name="MangaDetail" component={MangaDetailScreen} />
+      <Stack.Screen name="Profile" component={ProfileScreen} />
       <Stack.Screen name="Login" component={LoginScreen} />
       <Stack.Screen name="Register" component={RegisterScreen} />
     </Stack.Navigator>
   );
 }
 
-// Shown when logged IN
-function AppStack() {
-  return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="Home" component={HomeScreen} />
-      <Stack.Screen name="MangaDetail" component={MangaDetailScreen} />
-      <Stack.Screen name="Profile" component={ProfileScreen} />
-    </Stack.Navigator>
-  );
-}
-
 export default function App() {
-  const [user, setUser] = useState(undefined); // undefined = still loading
+  const [authChecked, setAuthChecked] = useState(false);
+  const [user, setUser] = useState(undefined);
+  const navigationRef = useRef(null);
+  const prevUserRef = useRef(undefined);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
-      setUser(firebaseUser ?? null); // null = definitely logged out
+      const prev = prevUserRef.current;
+      prevUserRef.current = firebaseUser;
+      setUser(firebaseUser ?? null);
+      setAuthChecked(true);
+
+      if (navigationRef.current) {
+        const wasLoggedOut = prev === null || prev === undefined;
+        const isNowLoggedIn = !!firebaseUser;
+        const wasLoggedIn = !!prev;
+        const isNowLoggedOut = !firebaseUser;
+
+        if (wasLoggedIn && isNowLoggedOut) {
+          navigationRef.current.reset({ index: 0, routes: [{ name: "Home" }] });
+        } else if (wasLoggedOut && isNowLoggedIn) {
+          const currentRoute = navigationRef.current.getCurrentRoute();
+          if (currentRoute?.name === "Login" || currentRoute?.name === "Register") {
+            navigationRef.current.reset({ index: 0, routes: [{ name: "Home" }] });
+          }
+        }
+      }
     });
     return unsubscribe;
   }, []);
 
-  // Still checking — show splash
-  if (user === undefined) {
+  if (!authChecked) {
     return (
       <View style={{ flex: 1, backgroundColor: "#0F0F0F", alignItems: "center", justifyContent: "center" }}>
         <ActivityIndicator color="#E8272F" size="large" />
@@ -56,11 +68,8 @@ export default function App() {
   }
 
   return (
-    // key={!!user} forces NavigationContainer to fully remount when
-    // auth state flips, guaranteeing a clean navigation stack reset
-    // on both login AND logout — no stale screens remain.
-    <NavigationContainer key={user ? "auth" : "guest"}>
-      {user ? <AppStack /> : <AuthStack />}
+    <NavigationContainer ref={navigationRef}>
+      <RootStack />
     </NavigationContainer>
   );
 }

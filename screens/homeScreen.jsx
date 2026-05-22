@@ -1,8 +1,3 @@
-/**
- * homeScreen.jsx — MangaVault
- * Goodreads-style browse list. Tap a card to open the detail/rating page.
- * No rating or commenting happens here — all on MangaDetailScreen.
- */
 
 import React, { useState, useEffect } from "react";
 import {
